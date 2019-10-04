@@ -2,17 +2,18 @@ package main
 
 import (
 	"archive/tar"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
-	"sync"
 	"strings"
-	"crypto/sha256"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+
 	docker "github.com/fsouza/go-dockerclient"
 	log "github.com/sirupsen/logrus"
 )
@@ -31,16 +32,16 @@ func main() {
 	}
 
 	img, err := client.InspectImage(imageID)
-	if err != nil { 
+	if err != nil {
 		fmt.Printf("Error inspecting image %s: %v\n", imageID, err)
 	}
 
 	rootFs := img.RootFS
-	for i, layer := range rootFs.Layers{
+	for i, layer := range rootFs.Layers {
 		fmt.Printf("Layer %d -> %s\n", i, layer)
 	}
 
-	last_idx := len(rootFs.Layers)-1
+	last_idx := len(rootFs.Layers) - 1
 	last_layer := rootFs.Layers[last_idx]
 	layer_sha := strings.ReplaceAll(last_layer, "sha256:", "")
 
@@ -64,7 +65,7 @@ func main() {
 		fmt.Printf("Exporting image...\n")
 		wg.Add(1)
 		opts := docker.ExportImageOptions{
-			Name:           imageID,
+			Name:         imageID,
 			OutputStream: tw,
 		}
 		err := client.ExportImage(opts)
@@ -106,7 +107,7 @@ func main() {
 
 }
 
-func ListTarFiles(r io.Reader, w io.WriteCloser, layer_sha string) error { 
+func ListTarFiles(r io.Reader, w io.WriteCloser, layer_sha string) error {
 
 	fmt.Printf("looking for layer %s\n", layer_sha)
 
@@ -131,7 +132,7 @@ func ListTarFiles(r io.Reader, w io.WriteCloser, layer_sha string) error {
 		}
 
 		// the target location where the dir/file should be created
-		if (strings.Contains(header.Name, ".tar")) {
+		if strings.Contains(header.Name, ".tar") {
 			fmt.Printf("Found layer tar: %s\n", header.Name)
 
 			tmpfile, err := ioutil.TempFile("", "layer")
@@ -144,64 +145,64 @@ func ListTarFiles(r io.Reader, w io.WriteCloser, layer_sha string) error {
 
 			mw := io.MultiWriter(tmpfile, h)
 
-			  n, err := io.Copy(mw, tr)
-			  if err != nil {
-				  fmt.Printf("Error copying layer to writer: %v\n", err)
-				  return err
-			  }
-			  
-			  fmt.Printf("Extracted %d bytes for layer %s\n", n, header.Name)
-			  hexString := fmt.Sprintf("%x", h.Sum(nil))
-			  if hexString == layer_sha {
-			    fmt.Printf("\n\n\n\nI FOOUUUUUUUUNDDDD ITTTT: %s -> %s\n\n\n\n", header.Name, layer_sha)
-			    tmpfile.Seek(0, 0)
-			    nb, err := io.Copy(w, tmpfile)
-			    if err != nil { 
-				    fmt.Printf("Error writing tmp file %s to S3: %v\n", tmpfile.Name, err) 
-			    }
-			    fmt.Printf("Wrote %d bytes to S3\n", nb)
-			    tmpfile.Close()
-			    os.Remove(tmpfile.Name())
-			    w.Close()
-			    return nil
-		  	  }
+			n, err := io.Copy(mw, tr)
+			if err != nil {
+				fmt.Printf("Error copying layer to writer: %v\n", err)
+				return err
+			}
 
-			  os.Remove(tmpfile.Name())
+			fmt.Printf("Extracted %d bytes for layer %s\n", n, header.Name)
+			hexString := fmt.Sprintf("%x", h.Sum(nil))
+			if hexString == layer_sha {
+				fmt.Printf("\n\n\n\nI FOOUUUUUUUUNDDDD ITTTT: %s -> %s\n\n\n\n", header.Name, layer_sha)
+				tmpfile.Seek(0, 0)
+				nb, err := io.Copy(w, tmpfile)
+				if err != nil {
+					fmt.Printf("Error writing tmp file %s to S3: %v\n", tmpfile.Name, err)
+				}
+				fmt.Printf("Wrote %d bytes to S3\n", nb)
+				tmpfile.Close()
+				os.Remove(tmpfile.Name())
+				w.Close()
+				return nil
+			}
+
+			os.Remove(tmpfile.Name())
 
 		}
 
-/*
-		// the following switch could also be done using fi.Mode(), not sure if there
-		// a benefit of using one vs. the other.
-		// fi := header.FileInfo()
+		/*
+			// the following switch could also be done using fi.Mode(), not sure if there
+			// a benefit of using one vs. the other.
+			// fi := header.FileInfo()
 
-		// check the file type
-		switch header.Typeflag {
+			// check the file type
+			switch header.Typeflag {
 
-		// if its a dir and it doesn't exist create it
-		case tar.TypeDir:
-			if _, err := os.Stat(target); err != nil {
-				if err := os.MkdirAll(target, 0755); err != nil {
+			// if its a dir and it doesn't exist create it
+			case tar.TypeDir:
+				if _, err := os.Stat(target); err != nil {
+					if err := os.MkdirAll(target, 0755); err != nil {
+						return err
+					}
+				}
+
+			// if it's a file create it
+			case tar.TypeReg:
+				f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+				if err != nil {
 					return err
 				}
-			}
 
-		// if it's a file create it
-		case tar.TypeReg:
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
-			if err != nil {
-				return err
-			}
+				// copy over contents
+				if _, err := io.Copy(f, tr); err != nil {
+					return err
+				}
 
-			// copy over contents
-			if _, err := io.Copy(f, tr); err != nil {
-				return err
-			}
+				// manually close here after each file operation; defering would cause each file close
+				// to wait until all operations have completed.
+				f.Close()
+			}*/
 
-			// manually close here after each file operation; defering would cause each file close
-			// to wait until all operations have completed.
-			f.Close()
-		}*/
-		
 	}
 }
